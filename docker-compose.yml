@@ -1,0 +1,52 @@
+version: '3'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: job-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - job-network
+    restart: always
+
+  job-master:
+    build: .
+    container_name: job-master
+    depends_on:
+      - redis
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - MONGODB_URI=mongodb://host.docker.internal:27017/job-master
+      - REDIS_URL=redis://redis:6379
+      - MAIN_API_URL=http://host.docker.internal:3000
+    ports:
+      - "4000:4000"
+    networks:
+      - job-network
+    restart: always
+    volumes:
+      - ./logs:/app/logs
+
+  estimation-worker:
+    build: .
+    container_name: estimation-worker
+    depends_on:
+      - redis
+      - job-master
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://host.docker.internal:27017/job-master
+      - REDIS_URL=redis://redis:6379
+      - MAIN_API_URL=http://host.docker.internal:3000
+    command: ["npm", "run", "worker"]
+    networks:
+      - job-network
+    restart: always
+    volumes:
+      - ./logs:/app/logs
+
+networks:
+  job-network:
+    driver: bridge
