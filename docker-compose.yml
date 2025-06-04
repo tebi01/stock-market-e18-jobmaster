@@ -1,4 +1,3 @@
-version: '3'
 
 services:
   redis:
@@ -20,9 +19,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - MONGODB_URI=mongodb://host.docker.internal:27017/job-master
+      - MONGODB_URI=mongodb://3.16.110.253:27017/job-master
       - REDIS_URL=redis://redis:6379
-      - MAIN_API_URL=http://host.docker.internal:3000
+      - MAIN_API_URL=https://api.eberosg.me
     ports:
       - "4000:4000"
     networks:

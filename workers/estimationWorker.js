@@ -1,5 +1,5 @@
 const { initializeQueue, getEstimationQueue } = require('../services/estimationService');
-const Job = require('./models/Job');
+const Job = require('../models/Job');
 const axios = require('axios');
 const logger = require('../utils/logger');
 

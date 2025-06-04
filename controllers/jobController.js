@@ -1,4 +1,4 @@
-const Job = require('../models/job');
+const Job = require('../models/Job');
 const { createEstimationJob } = require('../services/estimationService');
 const logger = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
