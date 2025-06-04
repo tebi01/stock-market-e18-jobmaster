@@ -11,7 +11,9 @@ services:
     restart: always
 
   job-master:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.jobmaster
     container_name: job-master
     depends_on:
       - redis
@@ -30,7 +32,9 @@ services:
       - ./logs:/app/logs
 
   estimation-worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.estimation
     container_name: estimation-worker
     depends_on:
       - redis
