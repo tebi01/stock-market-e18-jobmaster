@@ -19,7 +19,8 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - MONGODB_URI=mongodb://3.16.110.253:27017/job-master
+      - MONGODB_URI=mongodb://3.16.110.253:27017/stock-market
+#      - MONGODB_URI=mongodb://host.docker.internal/stock-market
       - REDIS_URL=redis://redis:6379
       - MAIN_API_URL=https://api.eberosg.me
     ports:
@@ -40,7 +41,7 @@ services:
       - job-master
     environment:
       - NODE_ENV=production
-      - MONGODB_URI=mongodb://host.docker.internal:27017/job-master
+      - MONGODB_URI=mongodb://3.16.110.253:27017/stock-market
       - REDIS_URL=redis://redis:6379
       - MAIN_API_URL=http://host.docker.internal:3000
     command: ["npm", "run", "worker"]
