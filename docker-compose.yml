@@ -20,9 +20,9 @@ services:
       - NODE_ENV=production
       - PORT=4000
       - MONGODB_URI=mongodb://3.16.110.253:27017/stock-market
-#      - MONGODB_URI=mongodb://host.docker.internal/stock-market
       - REDIS_URL=redis://redis:6379
-      - MAIN_API_URL=https://api.eberosg.me
+      #- MAIN_API_URL=https://api.eberosg.me
+      - MAIN_API_URL=http://host.docker.internal:3000
     ports:
       - "4000:4000"
     networks:
@@ -43,7 +43,11 @@ services:
       - NODE_ENV=production
       - MONGODB_URI=mongodb://3.16.110.253:27017/stock-market
       - REDIS_URL=redis://redis:6379
+      #- MAIN_API_URL=https://api.eberosg.me
       - MAIN_API_URL=http://host.docker.internal:3000
+      - AUTH0_URL=https://dev-qtg1vycp6zc4uv20.us.auth0.com/oauth/token
+      - AUTH0_CLIENT_ID=ah9AII5mfWddiNDph6iUR48Yb7gdTcKc
+      - AUTH0_SECRET=gFIQgJRDlJ5RI0_Vp1A8dY2aqRhVgL0_3whrRPw0mFJimBPCcC33ppIhUVfktJJn
     command: ["npm", "run", "worker"]
     networks:
       - job-network
