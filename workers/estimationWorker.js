@@ -108,6 +108,12 @@ const generateInterpolatedData = (prices, targetPoints = 100) => {
       );
     }
 
+    // Verificar que el precio interpolado es válido
+    if (isNaN(interpolatedPrice)) {
+      logger.error(`generateInterpolatedData: Precio interpolado inválido en punto ${i}: ${interpolatedPrice}`);
+      logger.error(`generateInterpolatedData: leftPoint=${JSON.stringify(leftPoint)}, rightPoint=${JSON.stringify(rightPoint)}`);
+    }
+
     interpolatedData.push({
       timestamp: targetDate.toISOString(),
       price: interpolatedPrice
@@ -138,7 +144,19 @@ const calculateLinearRegression = (data) => {
   const sumXX = points.reduce((sum, point) => sum + point.x * point.x, 0);
 
   // Calcular pendiente (slope) y ordenada al origen (intercept)
-  const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+  const denominator = (n * sumXX - sumX * sumX);
+  
+  if (denominator === 0) {
+    logger.warn('calculateLinearRegression: Denominador es 0, usando valores por defecto');
+    return {
+      slope: 0,
+      intercept: sumY / n,
+      rSquared: 0,
+      points
+    };
+  }
+
+  const slope = (n * sumXY - sumX * sumY) / denominator;
   const intercept = (sumY - slope * sumX) / n;
 
   // Calcular coeficiente de correlación (R²)
@@ -168,13 +186,23 @@ const calculateRegressionEstimation = (prices) => {
   // Generar 100 puntos interpolados
   const interpolatedData = generateInterpolatedData(prices, 100);
   
+  if (!interpolatedData || interpolatedData.length === 0) {
+    logger.error('calculateRegressionEstimation: No se pudieron generar datos interpolados');
+    throw new Error('Error en interpolación de datos');
+  }
+
   // Calcular regresión lineal
   const regression = calculateLinearRegression(interpolatedData);
   
+  if (!regression || isNaN(regression.slope) || isNaN(regression.intercept)) {
+    logger.error(`calculateRegressionEstimation: Regresión inválida: ${JSON.stringify(regression)}`);
+    throw new Error('Error en cálculo de regresión lineal');
+  }
+
   // Obtener el precio actual (último punto)
   const lastPoint = interpolatedData[interpolatedData.length - 1];
   const currentPrice = lastPoint.price;
-  
+
   // Calcular el tiempo del último punto en días desde el inicio
   const startTime = new Date(interpolatedData[0].timestamp).getTime();
   const lastTime = new Date(lastPoint.timestamp).getTime();
@@ -183,7 +211,7 @@ const calculateRegressionEstimation = (prices) => {
   // Proyectar precio para 30 días después del último punto
   const futureDays = daysSinceStart + 30;
   const estimatedPrice = regression.slope * futureDays + regression.intercept;
-  
+
   // Calcular crecimiento estimado
   const estimatedGrowth = ((estimatedPrice - currentPrice) / currentPrice) * 100;
   
@@ -195,7 +223,7 @@ const calculateRegressionEstimation = (prices) => {
     confidence = 'medium';
   }
 
-  return {
+  const result = {
     currentPrice,
     estimatedPrice: Math.max(0, estimatedPrice), // No permitir precios negativos
     estimatedGrowth,
@@ -206,6 +234,7 @@ const calculateRegressionEstimation = (prices) => {
     interpolatedPoints: interpolatedData.length,
     originalDataPoints: prices.length
   };
+  return result;
 };
 
 // Procesar job de estimación
@@ -250,7 +279,14 @@ const processEstimationJob = async (job) => {
       const { symbol, quantity } = holding;
       
       try {
-        logger.info(`Procesando acción ${symbol} con cantidad ${quantity}- paso 2`);
+        // Validar y convertir quantity a number
+        const validQuantity = parseFloat(quantity);
+        if (isNaN(validQuantity) || validQuantity <= 0) {
+          logger.warn(`Cantidad inválida para ${symbol}: ${quantity}, omitiendo`);
+          continue;
+        }
+        
+        logger.info(`Procesando acción ${symbol} con cantidad ${validQuantity} (original: ${quantity}, tipo: ${typeof quantity})- paso 2`);
         // PASO 2: Obtener historial de precios para cada acción
         const historyResponse = await axios.get(`${process.env.MAIN_API_URL}/api/stocks/${symbol}/history?days=30`, {
           timeout: 10000,
@@ -266,23 +302,37 @@ const processEstimationJob = async (job) => {
           continue;
         }
         
+        // Verificar que los precios son válidos
+        const invalidPrices = priceHistory.filter(p => !p || isNaN(p.price) || !p.timestamp);
+        if (invalidPrices.length > 0) {
+          logger.error(`Precios inválidos encontrados para ${symbol}: ${JSON.stringify(invalidPrices)}`);
+        }
+        
         // PASO 3: Calcular función lineal (ahora usando regresión con interpolación)
         logger.info(`Calculando estimación para ${symbol} - paso 3`);
         const estimation = calculateRegressionEstimation(priceHistory);
         
+        // Verificar que la estimación es válida
+        if (!estimation || isNaN(estimation.currentPrice) || isNaN(estimation.estimatedPrice)) {
+          logger.error(`Estimación inválida para ${symbol}: ${JSON.stringify(estimation)}`);
+          continue;
+        }
+        
         // PASO 4: Multiplicar por cantidad del usuario
         logger.info(`Calculando valor estimado para ${symbol} - paso 4`);
-        const currentValue = estimation.currentPrice * quantity;
-        const estimatedValue = estimation.estimatedPrice * quantity;
+        const currentValue = estimation.currentPrice * validQuantity;
+        const estimatedValue = estimation.estimatedPrice * validQuantity;
         const estimatedGains = estimatedValue - currentValue;
         
-        // Debug logs
-        logger.info(`Debug ${symbol}: currentPrice=${estimation.currentPrice}, estimatedPrice=${estimation.estimatedPrice}, quantity=${quantity}`);
-        logger.info(`Debug ${symbol}: currentValue=${currentValue}, estimatedValue=${estimatedValue}, estimatedGains=${estimatedGains}`);
+        // Validar que los cálculos sean números válidos
+        if (isNaN(currentValue) || isNaN(estimatedValue) || isNaN(estimatedGains)) {
+          logger.error(`Valores calculados inválidos para ${symbol}: currentValue=${currentValue}, estimatedValue=${estimatedValue}, estimatedGains=${estimatedGains}`);
+          continue;
+        }
         
         const stockEstimation = {
           symbol,
-          quantity,
+          quantity: validQuantity, // Usar la cantidad validada
           currentPrice: estimation.currentPrice,
           estimatedPrice: estimation.estimatedPrice,
           currentValue,
@@ -296,8 +346,10 @@ const processEstimationJob = async (job) => {
         totalCurrentValue += currentValue;
         totalEstimatedValue += estimatedValue;
         
-        logger.info(`Debug totales: totalCurrentValue=${totalCurrentValue}, totalEstimatedValue=${totalEstimatedValue}`);
-        logger.info(`Estimación calculada para ${symbol}: ${estimatedGains.toFixed(2)} ganancia estimada`);
+        // Validar totales acumulados
+        if (isNaN(totalCurrentValue) || isNaN(totalEstimatedValue)) {
+          logger.error(`Totales inválidos después de ${symbol}: totalCurrentValue=${totalCurrentValue}, totalEstimatedValue=${totalEstimatedValue}`);
+        }
         
       } catch (stockError) {
         logger.error(`Error procesando ${symbol}:`, stockError);
@@ -311,23 +363,26 @@ const processEstimationJob = async (job) => {
     
     const totalEstimatedGains = totalEstimatedValue - totalCurrentValue;
     
-    // Debug logs para el resumen
-    logger.info(`Debug resumen final: totalCurrentValue=${totalCurrentValue}, totalEstimatedValue=${totalEstimatedValue}, totalEstimatedGains=${totalEstimatedGains}`);
+    // Validación final antes de crear el resumen
+    if (isNaN(totalCurrentValue) || isNaN(totalEstimatedValue) || isNaN(totalEstimatedGains)) {
+      logger.error(`Valores finales inválidos: totalCurrentValue=${totalCurrentValue}, totalEstimatedValue=${totalEstimatedValue}, totalEstimatedGains=${totalEstimatedGains}`);
+      throw new Error('Cálculos de resumen inválidos - valores NaN detectados');
+    }
+    
+    const totalGrowthPercent = totalCurrentValue > 0 ? (totalEstimatedGains / totalCurrentValue) * 100 : 0;
     
     const result = {
       userEmail,
       estimations, // Cada aproximación de cada acción
       summary: {
-        totalCurrentValue,
-        totalEstimatedValue,
-        totalEstimatedGains,
-        totalGrowthPercent: totalCurrentValue > 0 ? (totalEstimatedGains / totalCurrentValue) * 100 : 0,
+        totalCurrentValue: Number(totalCurrentValue.toFixed(2)),
+        totalEstimatedValue: Number(totalEstimatedValue.toFixed(2)),
+        totalEstimatedGains: Number(totalEstimatedGains.toFixed(2)),
+        totalGrowthPercent: Number(totalGrowthPercent.toFixed(2)),
         stocksAnalyzed: estimations.length
       },
       calculatedAt: new Date().toISOString()
     };
-    
-    logger.info(`Debug result.summary: ${JSON.stringify(result.summary)}`);
     
     // Actualizar job con resultado
     await Job.findOneAndUpdate(
