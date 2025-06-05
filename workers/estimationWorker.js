@@ -32,47 +32,209 @@ async function getToken() {
       console.error('Error fetching token:', error);
   }
 }
-// Función para calcular estimación lineal
-const calculateLinearEstimation = (prices) => {
+
+// Función para interpolación lineal entre dos puntos
+const interpolateLinear = (x1, y1, x2, y2, x) => {
+  if (x2 === x1) return y1;
+  return y1 + ((y2 - y1) * (x - x1)) / (x2 - x1);
+};
+
+// Función para generar 100 puntos mediante interpolación
+const generateInterpolatedData = (prices, targetPoints = 100) => {
+  if (!prices || prices.length === 0) {
+    throw new Error('No hay datos de precios para interpolar');
+  }
+
+  // Ordenar por timestamp
+  const sortedPrices = [...prices].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  if (sortedPrices.length === 1) {
+    // Si solo hay un punto, generar 100 puntos con el mismo precio
+    const singlePrice = sortedPrices[0];
+    const now = new Date();
+    const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    
+    return Array.from({ length: targetPoints }, (_, i) => {
+      const timestamp = new Date(monthAgo.getTime() + (i * 30 * 24 * 60 * 60 * 1000) / (targetPoints - 1));
+      return {
+        timestamp: timestamp.toISOString(),
+        price: singlePrice.price
+      };
+    });
+  }
+
+  const firstPoint = sortedPrices[0];
+  const lastPoint = sortedPrices[sortedPrices.length - 1];
+  const startTime = new Date(firstPoint.timestamp).getTime();
+  const endTime = new Date(lastPoint.timestamp).getTime();
+  const timeRange = endTime - startTime;
+
+  const interpolatedData = [];
+
+  for (let i = 0; i < targetPoints; i++) {
+    // Calcular el tiempo para este punto
+    const targetTime = startTime + (timeRange * i) / (targetPoints - 1);
+    const targetDate = new Date(targetTime);
+
+    // Encontrar los dos puntos más cercanos en los datos originales
+    let leftIndex = 0;
+    let rightIndex = sortedPrices.length - 1;
+
+    for (let j = 0; j < sortedPrices.length - 1; j++) {
+      const currentTime = new Date(sortedPrices[j].timestamp).getTime();
+      const nextTime = new Date(sortedPrices[j + 1].timestamp).getTime();
+      
+      if (targetTime >= currentTime && targetTime <= nextTime) {
+        leftIndex = j;
+        rightIndex = j + 1;
+        break;
+      }
+    }
+
+    // Interpolar el precio
+    const leftPoint = sortedPrices[leftIndex];
+    const rightPoint = sortedPrices[rightIndex];
+    const leftTime = new Date(leftPoint.timestamp).getTime();
+    const rightTime = new Date(rightPoint.timestamp).getTime();
+    
+    let interpolatedPrice;
+    if (leftTime === rightTime) {
+      interpolatedPrice = leftPoint.price;
+    } else {
+      interpolatedPrice = interpolateLinear(
+        leftTime, leftPoint.price,
+        rightTime, rightPoint.price,
+        targetTime
+      );
+    }
+
+    // Verificar que el precio interpolado es válido
+    if (isNaN(interpolatedPrice)) {
+      logger.error(`generateInterpolatedData: Precio interpolado inválido en punto ${i}: ${interpolatedPrice}`);
+      logger.error(`generateInterpolatedData: leftPoint=${JSON.stringify(leftPoint)}, rightPoint=${JSON.stringify(rightPoint)}`);
+    }
+
+    interpolatedData.push({
+      timestamp: targetDate.toISOString(),
+      price: interpolatedPrice
+    });
+  }
+
+  return interpolatedData;
+};
+
+// Función para calcular regresión lineal
+const calculateLinearRegression = (data) => {
+  const n = data.length;
+  if (n < 2) {
+    throw new Error('Se necesitan al menos 2 puntos para regresión lineal');
+  }
+
+  // Convertir timestamps a números (días desde el primer punto)
+  const startTime = new Date(data[0].timestamp).getTime();
+  const points = data.map(point => ({
+    x: (new Date(point.timestamp).getTime() - startTime) / (1000 * 60 * 60 * 24), // días
+    y: point.price
+  }));
+
+  // Calcular sumas necesarias para regresión lineal
+  const sumX = points.reduce((sum, point) => sum + point.x, 0);
+  const sumY = points.reduce((sum, point) => sum + point.y, 0);
+  const sumXY = points.reduce((sum, point) => sum + point.x * point.y, 0);
+  const sumXX = points.reduce((sum, point) => sum + point.x * point.x, 0);
+
+  // Calcular pendiente (slope) y ordenada al origen (intercept)
+  const denominator = (n * sumXX - sumX * sumX);
+  
+  if (denominator === 0) {
+    logger.warn('calculateLinearRegression: Denominador es 0, usando valores por defecto');
+    return {
+      slope: 0,
+      intercept: sumY / n,
+      rSquared: 0,
+      points
+    };
+  }
+
+  const slope = (n * sumXY - sumX * sumY) / denominator;
+  const intercept = (sumY - slope * sumX) / n;
+
+  // Calcular coeficiente de correlación (R²)
+  const meanY = sumY / n;
+  const totalSumSquares = points.reduce((sum, point) => sum + Math.pow(point.y - meanY, 2), 0);
+  const residualSumSquares = points.reduce((sum, point) => {
+    const predictedY = slope * point.x + intercept;
+    return sum + Math.pow(point.y - predictedY, 2);
+  }, 0);
+  
+  const rSquared = totalSumSquares === 0 ? 1 : 1 - (residualSumSquares / totalSumSquares);
+
+  return {
+    slope,
+    intercept,
+    rSquared,
+    points
+  };
+};
+
+// Función para calcular estimación con regresión lineal
+const calculateRegressionEstimation = (prices) => {
   if (!prices || prices.length < 2) {
     throw new Error('Se necesitan al menos 2 puntos de precio para estimación');
   }
+
+  // Generar 100 puntos interpolados
+  const interpolatedData = generateInterpolatedData(prices, 100);
   
-  // Ordenar por timestamp
-  prices.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-  
-  const firstPrice = prices[0];
-  const lastPrice = prices[prices.length - 1];
-  
-  // Calcular diferencia en días
-  const timeDiff = new Date(lastPrice.timestamp) - new Date(firstPrice.timestamp);
-  const daysDiff = timeDiff / (1000 * 60 * 60 * 24);
-  
-  if (daysDiff === 0) {
-    return {
-      currentPrice: lastPrice.price,
-      estimatedPrice: lastPrice.price,
-      estimatedGrowth: 0,
-      confidence: 'low'
-    };
+  if (!interpolatedData || interpolatedData.length === 0) {
+    logger.error('calculateRegressionEstimation: No se pudieron generar datos interpolados');
+    throw new Error('Error en interpolación de datos');
   }
+
+  // Calcular regresión lineal
+  const regression = calculateLinearRegression(interpolatedData);
   
-  // Calcular pendiente (cambio de precio por día)
-  const slope = (lastPrice.price - firstPrice.price) / daysDiff;
+  if (!regression || isNaN(regression.slope) || isNaN(regression.intercept)) {
+    logger.error(`calculateRegressionEstimation: Regresión inválida: ${JSON.stringify(regression)}`);
+    throw new Error('Error en cálculo de regresión lineal');
+  }
+
+  // Obtener el precio actual (último punto)
+  const lastPoint = interpolatedData[interpolatedData.length - 1];
+  const currentPrice = lastPoint.price;
+
+  // Calcular el tiempo del último punto en días desde el inicio
+  const startTime = new Date(interpolatedData[0].timestamp).getTime();
+  const lastTime = new Date(lastPoint.timestamp).getTime();
+  const daysSinceStart = (lastTime - startTime) / (1000 * 60 * 60 * 24);
   
-  // Proyectar precio para el próximo mes (30 días)
-  const estimatedPrice = lastPrice.price + (slope * 30);
-  
+  // Proyectar precio para 30 días después del último punto
+  const futureDays = daysSinceStart + 30;
+  const estimatedPrice = regression.slope * futureDays + regression.intercept;
+
   // Calcular crecimiento estimado
-  const estimatedGrowth = ((estimatedPrice - lastPrice.price) / lastPrice.price) * 100;
+  const estimatedGrowth = ((estimatedPrice - currentPrice) / currentPrice) * 100;
   
-  return {
-    currentPrice: lastPrice.price,
+  // Determinar confianza basada en R² y cantidad de datos originales
+  let confidence = 'low';
+  if (regression.rSquared > 0.8 && prices.length >= 10) {
+    confidence = 'high';
+  } else if (regression.rSquared > 0.6 && prices.length >= 5) {
+    confidence = 'medium';
+  }
+
+  const result = {
+    currentPrice,
     estimatedPrice: Math.max(0, estimatedPrice), // No permitir precios negativos
     estimatedGrowth,
-    slope,
-    confidence: prices.length >= 7 ? 'high' : prices.length >= 3 ? 'medium' : 'low'
+    slope: regression.slope,
+    intercept: regression.intercept,
+    rSquared: regression.rSquared,
+    confidence,
+    interpolatedPoints: interpolatedData.length,
+    originalDataPoints: prices.length
   };
+  return result;
 };
 
 // Procesar job de estimación
@@ -92,11 +254,12 @@ const processEstimationJob = async (job) => {
       { status: 'PROCESSING' }
     );
     logger.info(`Job ${jobId} actualizado a PROCESSING`);
+    
     // PASO 1: Obtener todos los tipos de acciones del usuario y sus cantidades
     const userPortfolioResponse = await axios.get(`${process.env.MAIN_API_URL}/api/user/${userEmail}/portfolio`, {
       timeout: 10000,
       headers: {
-      Authorization: `Bearer ${token}`
+        Authorization: `Bearer ${token}`
       }
     });
     logger.info(`Obteniendo portafolio de usuario ${userPortfolioResponse} ------------------`);
@@ -116,13 +279,20 @@ const processEstimationJob = async (job) => {
       const { symbol, quantity } = holding;
       
       try {
-        logger.info(`Procesando acción ${symbol} con cantidad ${quantity}- paso 2`);
+        // Validar y convertir quantity a number
+        const validQuantity = parseFloat(quantity);
+        if (isNaN(validQuantity) || validQuantity <= 0) {
+          logger.warn(`Cantidad inválida para ${symbol}: ${quantity}, omitiendo`);
+          continue;
+        }
+        
+        logger.info(`Procesando acción ${symbol} con cantidad ${validQuantity} (original: ${quantity}, tipo: ${typeof quantity})- paso 2`);
         // PASO 2: Obtener historial de precios para cada acción
         const historyResponse = await axios.get(`${process.env.MAIN_API_URL}/api/stocks/${symbol}/history?days=30`, {
           timeout: 10000,
           headers: {
-      Authorization: `Bearer ${token}`
-      }
+            Authorization: `Bearer ${token}`
+          }
         });
         
         const priceHistory = historyResponse.data;
@@ -132,19 +302,37 @@ const processEstimationJob = async (job) => {
           continue;
         }
         
-        // PASO 3: Calcular función lineal
+        // Verificar que los precios son válidos
+        const invalidPrices = priceHistory.filter(p => !p || isNaN(p.price) || !p.timestamp);
+        if (invalidPrices.length > 0) {
+          logger.error(`Precios inválidos encontrados para ${symbol}: ${JSON.stringify(invalidPrices)}`);
+        }
+        
+        // PASO 3: Calcular función lineal (ahora usando regresión con interpolación)
         logger.info(`Calculando estimación para ${symbol} - paso 3`);
-        const estimation = calculateLinearEstimation(priceHistory);
+        const estimation = calculateRegressionEstimation(priceHistory);
+        
+        // Verificar que la estimación es válida
+        if (!estimation || isNaN(estimation.currentPrice) || isNaN(estimation.estimatedPrice)) {
+          logger.error(`Estimación inválida para ${symbol}: ${JSON.stringify(estimation)}`);
+          continue;
+        }
         
         // PASO 4: Multiplicar por cantidad del usuario
         logger.info(`Calculando valor estimado para ${symbol} - paso 4`);
-        const currentValue = estimation.currentPrice * quantity;
-        const estimatedValue = estimation.estimatedPrice * quantity;
+        const currentValue = estimation.currentPrice * validQuantity;
+        const estimatedValue = estimation.estimatedPrice * validQuantity;
         const estimatedGains = estimatedValue - currentValue;
+        
+        // Validar que los cálculos sean números válidos
+        if (isNaN(currentValue) || isNaN(estimatedValue) || isNaN(estimatedGains)) {
+          logger.error(`Valores calculados inválidos para ${symbol}: currentValue=${currentValue}, estimatedValue=${estimatedValue}, estimatedGains=${estimatedGains}`);
+          continue;
+        }
         
         const stockEstimation = {
           symbol,
-          quantity,
+          quantity: validQuantity, // Usar la cantidad validada
           currentPrice: estimation.currentPrice,
           estimatedPrice: estimation.estimatedPrice,
           currentValue,
@@ -158,7 +346,10 @@ const processEstimationJob = async (job) => {
         totalCurrentValue += currentValue;
         totalEstimatedValue += estimatedValue;
         
-        logger.info(`Estimación calculada para ${symbol}: ${estimatedGains.toFixed(2)} ganancia estimada`);
+        // Validar totales acumulados
+        if (isNaN(totalCurrentValue) || isNaN(totalEstimatedValue)) {
+          logger.error(`Totales inválidos después de ${symbol}: totalCurrentValue=${totalCurrentValue}, totalEstimatedValue=${totalEstimatedValue}`);
+        }
         
       } catch (stockError) {
         logger.error(`Error procesando ${symbol}:`, stockError);
@@ -172,14 +363,22 @@ const processEstimationJob = async (job) => {
     
     const totalEstimatedGains = totalEstimatedValue - totalCurrentValue;
     
+    // Validación final antes de crear el resumen
+    if (isNaN(totalCurrentValue) || isNaN(totalEstimatedValue) || isNaN(totalEstimatedGains)) {
+      logger.error(`Valores finales inválidos: totalCurrentValue=${totalCurrentValue}, totalEstimatedValue=${totalEstimatedValue}, totalEstimatedGains=${totalEstimatedGains}`);
+      throw new Error('Cálculos de resumen inválidos - valores NaN detectados');
+    }
+    
+    const totalGrowthPercent = totalCurrentValue > 0 ? (totalEstimatedGains / totalCurrentValue) * 100 : 0;
+    
     const result = {
       userEmail,
       estimations, // Cada aproximación de cada acción
       summary: {
-        totalCurrentValue,
-        totalEstimatedValue,
-        totalEstimatedGains,
-        totalGrowthPercent: totalCurrentValue > 0 ? (totalEstimatedGains / totalCurrentValue) * 100 : 0,
+        totalCurrentValue: Number(totalCurrentValue.toFixed(2)),
+        totalEstimatedValue: Number(totalEstimatedValue.toFixed(2)),
+        totalEstimatedGains: Number(totalEstimatedGains.toFixed(2)),
+        totalGrowthPercent: Number(totalGrowthPercent.toFixed(2)),
         stocksAnalyzed: estimations.length
       },
       calculatedAt: new Date().toISOString()
@@ -206,8 +405,8 @@ const processEstimationJob = async (job) => {
       }, {
         timeout: 5000,
         headers: {
-      Authorization: `Bearer ${token}`
-      }
+          Authorization: `Bearer ${token}`
+        }
       });
     } catch (callbackError) {
       logger.error('Error en callback a API principal:', callbackError.message);
