@@ -29,6 +29,15 @@ app.get('/heartbeat', (req, res) => {
   });
 });
 
+app.get('/mongo-test', async (req, res) => {
+  try {
+    await mongoose.connection.db.admin().ping();
+    res.json({ connected: true });
+  } catch (err) {
+    res.status(500).json({ connected: false, error: err.message });
+  }
+});
+
 // Rutas
 app.use('/job', jobRoutes);
 
